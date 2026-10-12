@@ -14,6 +14,7 @@
 
 #ifndef QUILL_MODULE
   #include <algorithm>
+  #include <atomic>
   #include <cstdint>
   #include <memory>
   #include <string>
@@ -58,9 +59,20 @@ public:
   /***/
   QUILL_EXPORT static inline SinkManager& instance() noexcept
   {
-    static SinkManager instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<SinkManager*>& instance_ptr() noexcept
+  {
+    static std::atomic<SinkManager*> instance{new SinkManager()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /***/
   QUILL_NODISCARD std::shared_ptr<Sink> get_sink(std::string const& sink_name) const

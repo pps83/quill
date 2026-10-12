@@ -48,9 +48,20 @@ public:
   // Named modules do not give in-class definitions implicit inline linkage.
   QUILL_EXPORT static inline LoggerManager& instance() noexcept
   {
-    static LoggerManager instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<LoggerManager*>& instance_ptr() noexcept
+  {
+    static std::atomic<LoggerManager*> instance{new LoggerManager()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /***/
   QUILL_NODISCARD LoggerBase* get_logger(std::string const& logger_name) const

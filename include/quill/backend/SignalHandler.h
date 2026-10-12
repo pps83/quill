@@ -204,9 +204,20 @@ public:
   /***/
   QUILL_EXPORT static inline SignalHandlerContext& instance() noexcept
   {
-    static SignalHandlerContext instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<SignalHandlerContext*>& instance_ptr() noexcept
+  {
+    static std::atomic<SignalHandlerContext*> instance{new SignalHandlerContext()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /***/
   QUILL_NODISCARD static LoggerBase* get_logger() noexcept
