@@ -137,6 +137,34 @@ public:
     return _worker_thread_id.load();
   }
 
+  /**
+   * Asks the backend to write every message queued so far by any thread and flush the sinks, and
+   * waits until it has or the timeout passes. Uses no queue of the calling thread, so a crash
+   * handler can call it on a thread that never logged.
+   * @return false on timeout, when the backend is not running or when called on its own thread
+   */
+  QUILL_NODISCARD bool flush_all(std::chrono::nanoseconds timeout) noexcept
+  {
+    if (!is_running() || (get_thread_id() == _worker_thread_id.load()))
+    {
+      return false;
+    }
+
+    uint64_t const request = _flush_all_requested.fetch_add(1, std::memory_order_acq_rel) + 1;
+    notify();
+
+    auto const deadline = std::chrono::steady_clock::now() + timeout;
+    while (_flush_all_completed.load(std::memory_order_acquire) < request)
+    {
+      if (std::chrono::steady_clock::now() >= deadline)
+      {
+        return false;
+      }
+      std::this_thread::yield();
+    }
+    return true;
+  }
+
   /***/
   QUILL_ATTRIBUTE_COLD static void validate_options(BackendOptions const& options)
   {
@@ -522,6 +550,12 @@ private:
    */
   QUILL_ATTRIBUTE_HOT void _poll()
   {
+    if (QUILL_UNLIKELY(_flush_all_requested.load(std::memory_order_acquire) !=
+                       _flush_all_completed.load(std::memory_order_relaxed)))
+    {
+      _process_flush_all_request();
+    }
+
     // poll hook
     bool poll_end_called = false;
     if (QUILL_UNLIKELY(static_cast<bool>(_options.backend_worker_on_poll_begin)))
@@ -669,6 +703,32 @@ private:
   void _clear_backend_thread_flag() noexcept
   {
     LoggerBase::set_current_thread_is_backend_thread(false);
+  }
+
+  /**
+   * Serves flush_all(): writes everything queued, bounded so threads that keep logging cannot hold
+   * the request forever, then flushes the sinks
+   */
+  QUILL_ATTRIBUTE_COLD void _process_flush_all_request()
+  {
+    uint64_t const request = _flush_all_requested.load(std::memory_order_acquire);
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+
+    while (!_check_frontend_queues_and_cached_transit_events_empty() &&
+           (std::chrono::steady_clock::now() < deadline))
+    {
+      uint64_t const cached_transit_events_count = _populate_transit_events_from_frontend_queues();
+      if (cached_transit_events_count > 0)
+      {
+        while (!has_pending_events_for_caching_when_transit_event_buffer_empty() &&
+               _process_lowest_timestamp_transit_event())
+        {
+        }
+      }
+    }
+
+    _flush_and_run_active_sinks(false, std::chrono::milliseconds{0}, SinkFlushReason::Explicit);
+    _flush_all_completed.store(request, std::memory_order_release);
   }
 
   /**
@@ -2585,6 +2645,9 @@ private:
   alignas(QUILL_CACHE_LINE_ALIGNED) std::mutex _wake_up_mutex;
   std::condition_variable _wake_up_cv;
   bool _wake_up_flag{false};
+
+  alignas(QUILL_CACHE_LINE_ALIGNED) std::atomic<uint64_t> _flush_all_requested{0};
+  std::atomic<uint64_t> _flush_all_completed{0};
 };
 
 #if defined(_WIN32) && defined(_MSC_VER) && !defined(__GNUC__)
