@@ -492,6 +492,16 @@ private:
   std::atomic<uint32_t> _invalid_thread_context_count{0};
 };
 
+/**
+ * The calling thread's context as the frontend caches it, and whether the thread already released
+ * it at its exit: a log from a later thread_local destructor is then refused
+ */
+struct FrontendThreadState
+{
+  static inline QUILL_THREAD_LOCAL ThreadContext* thread_context = nullptr;
+  static inline QUILL_THREAD_LOCAL bool released = false;
+};
+
 class ScopedThreadContext
 {
 public:
@@ -525,6 +535,10 @@ public:
   /***/
   ~ScopedThreadContext() noexcept
   {
+    // Once invalid the context may be freed or pooled for another thread, so this one stops using it
+    FrontendThreadState::thread_context = nullptr;
+    FrontendThreadState::released = true;
+
     // This destructor will get called when the thread that created this wrapper stops
     // we will only invalidate the thread context
     // The backend thread will empty an invalidated ThreadContext and then remove_file it from
