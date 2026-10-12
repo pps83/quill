@@ -170,6 +170,34 @@ TEST_CASE("invalid_thread_context_counter_handles_large_batches")
   REQUIRE_FALSE(ThreadContextManager::instance().has_invalid_thread_context());
 }
 
+/***/
+void take_thread_context(ThreadContext** thread_context, std::string* thread_id)
+{
+  *thread_context = get_local_thread_context<FrontendOptions>();
+  *thread_id = std::string{(*thread_context)->thread_id()};
+}
+
+/***/
+TEST_CASE("pooled_thread_context_is_reused_by_the_next_thread")
+{
+  auto& manager = ThreadContextManager::instance();
+
+  ThreadContext* first{nullptr};
+  std::string first_thread_id;
+  std::thread{take_thread_context, &first, &first_thread_id}.join();
+  REQUIRE_FALSE(first->is_valid());
+  manager.remove_shared_invalidated_thread_context(first, 1);
+
+  ThreadContext* second{nullptr};
+  std::string second_thread_id;
+  std::thread{take_thread_context, &second, &second_thread_id}.join();
+  REQUIRE_EQ(second, first);
+  REQUIRE_NE(second_thread_id, first_thread_id);
+  REQUIRE(manager.has_invalid_thread_context());
+  manager.remove_shared_invalidated_thread_context(second);
+  REQUIRE_FALSE(manager.has_invalid_thread_context());
+}
+
 TEST_CASE("invalid_context_is_already_counted")
 {
   auto& manager = ThreadContextManager::instance();
