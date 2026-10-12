@@ -25,6 +25,7 @@ QUILL_BEGIN_EXPORT
 // Forward declarations
 class Backend;
 class BackendTscClock;
+class GlobalState;
 
 QUILL_END_EXPORT
 
@@ -48,9 +49,20 @@ public:
   /***/
   QUILL_EXPORT static inline BackendManager& instance() noexcept
   {
-    static BackendManager instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<BackendManager*>& instance_ptr() noexcept
+  {
+    static std::atomic<BackendManager*> instance{new BackendManager()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /***/
   BackendManager(BackendManager const&) = delete;
@@ -59,6 +71,7 @@ public:
 private:
   friend class quill::Backend;
   friend class quill::BackendTscClock;
+  friend class quill::GlobalState;
 
   /***/
   BackendManager() = default;

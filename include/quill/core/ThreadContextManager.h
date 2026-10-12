@@ -240,9 +240,20 @@ public:
   /***/
   QUILL_EXPORT static inline ThreadContextManager& instance() noexcept
   {
-    static ThreadContextManager instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<ThreadContextManager*>& instance_ptr() noexcept
+  {
+    static std::atomic<ThreadContextManager*> instance{new ThreadContextManager()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /***/
   ThreadContextManager(ThreadContextManager const&) = delete;
@@ -492,7 +503,12 @@ public:
     // There is only exception for the thread who owns the ThreadContextCollection the
     // main thread. The thread context of the main thread can get deleted before getting invalidated
     // Count retirement before publishing invalidity: the backend may remove it immediately.
-    ThreadContextManager::instance().add_invalid_thread_context();
+    // A quill::GlobalState may have destroyed the manager, and the backend with it, already.
+    if (ThreadContextManager* manager =
+          ThreadContextManager::instance_ptr().load(std::memory_order_acquire))
+    {
+      manager->add_invalid_thread_context();
+    }
     _thread_context->mark_invalid();
   }
 

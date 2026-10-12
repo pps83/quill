@@ -13,6 +13,7 @@
 
 #ifndef QUILL_MODULE
   #include <algorithm>
+  #include <atomic>
   #include <memory>
   #include <string>
   #include <string_view>
@@ -35,9 +36,20 @@ public:
   /***/
   QUILL_EXPORT static inline MetricManager& instance() noexcept
   {
-    static MetricManager instance;
+    return *instance_ptr().load(std::memory_order_acquire);
+  }
+
+  /**
+   * Never destroyed at exit: a quill::GlobalState, if there is one, destroys it
+   */
+  QUILL_EXPORT static inline std::atomic<MetricManager*>& instance_ptr() noexcept
+  {
+    static std::atomic<MetricManager*> instance{new MetricManager()};
     return instance;
   }
+
+  /***/
+  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
 
   /**
    * Creates a new metric.
