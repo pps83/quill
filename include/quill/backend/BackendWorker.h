@@ -137,6 +137,34 @@ public:
     return _worker_thread_id.load();
   }
 
+  /**
+   * Asks the backend to write every message queued so far by any thread and flush the sinks, and
+   * waits until it has or the timeout passes. Uses no queue of the calling thread, so a crash
+   * handler can call it on a thread that never logged.
+   * @return false on timeout, when the backend is not running or when called on its own thread
+   */
+  QUILL_NODISCARD bool flush_all(std::chrono::nanoseconds timeout) noexcept
+  {
+    if (!is_running() || (get_thread_id() == _worker_thread_id.load()))
+    {
+      return false;
+    }
+
+    uint64_t const request = _flush_all_requested.fetch_add(1, std::memory_order_acq_rel) + 1;
+    notify();
+
+    auto const deadline = std::chrono::steady_clock::now() + timeout;
+    while (_flush_all_completed.load(std::memory_order_acquire) < request)
+    {
+      if (std::chrono::steady_clock::now() >= deadline)
+      {
+        return false;
+      }
+      std::this_thread::yield();
+    }
+    return true;
+  }
+
   /***/
   QUILL_ATTRIBUTE_COLD static void validate_options(BackendOptions const& options)
   {
@@ -522,11 +550,17 @@ private:
    */
   QUILL_ATTRIBUTE_HOT void _poll()
   {
-    // poll hook
+    // poll hook, before any read of the frontend queues
     bool poll_end_called = false;
     if (QUILL_UNLIKELY(static_cast<bool>(_options.backend_worker_on_poll_begin)))
     {
       _invoke_poll_hook(_options.backend_worker_on_poll_begin);
+    }
+
+    if (QUILL_UNLIKELY(_flush_all_requested.load(std::memory_order_acquire) !=
+                       _flush_all_completed.load(std::memory_order_relaxed)))
+    {
+      _process_flush_all_request();
     }
 
     // load all contexts locally
@@ -669,6 +703,103 @@ private:
   void _clear_backend_thread_flag() noexcept
   {
     LoggerBase::set_current_thread_is_backend_thread(false);
+  }
+
+  /**
+   * The time a flush_all request was taken, in each clock's timestamps
+   */
+  struct FlushAllCutoff
+  {
+    uint64_t tsc;
+    uint64_t system;
+  };
+
+  QUILL_NODISCARD FlushAllCutoff _flush_all_cutoff_now() const
+  {
+    FlushAllCutoff cutoff{(std::numeric_limits<uint64_t>::max)(), detail::get_system_time_ns()};
+    uint64_t const rdtsc_value = detail::rdtsc();
+    if (_options.raw_rdtsc_timestamps)
+    {
+      cutoff.tsc = rdtsc_value;
+    }
+    else if (RdtscClock* rdtsc_clock = _rdtsc_clock.load(std::memory_order_relaxed))
+    {
+      cutoff.tsc = rdtsc_clock->time_since_epoch(rdtsc_value);
+    }
+    return cutoff;
+  }
+
+  /**
+   * A User clock's timestamps cannot be placed against the cutoff, so its events always count
+   */
+  QUILL_NODISCARD static bool _is_before_flush_all_cutoff(TransitEvent const& transit_event,
+                                                          FlushAllCutoff const& cutoff) noexcept
+  {
+    switch (transit_event.logger_base->_clock_source)
+    {
+    case ClockSourceType::Tsc:
+      return transit_event.timestamp <= cutoff.tsc;
+    case ClockSourceType::System:
+      return transit_event.timestamp <= cutoff.system;
+    case ClockSourceType::User:
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * A thread's events are queued in timestamp order: once its oldest cached event is past the
+   * cutoff, its unread events are too
+   */
+  QUILL_NODISCARD bool _is_flush_all_cutoff_written(FlushAllCutoff const& cutoff)
+  {
+    _update_active_thread_contexts_cache();
+
+    for (ThreadContext* thread_context : _active_thread_contexts_cache)
+    {
+      if (TransitEvent const* oldest = thread_context->_transit_event_buffer->front())
+      {
+        if (_is_before_flush_all_cutoff(*oldest, cutoff))
+        {
+          return false;
+        }
+      }
+      else if (thread_context->has_unbounded_queue_type()
+                 ? !thread_context->get_spsc_queue_union().unbounded_spsc_queue.empty()
+                 : !thread_context->get_spsc_queue_union().bounded_spsc_queue.empty())
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Serves flush_all(): writes every event queued before the request was taken, then flushes the
+   * sinks. Events queued later do not hold it up, so threads that keep logging cannot hold it forever
+   */
+  QUILL_ATTRIBUTE_COLD void _process_flush_all_request()
+  {
+    uint64_t const request = _flush_all_requested.load(std::memory_order_acquire);
+    FlushAllCutoff const cutoff = _flush_all_cutoff_now();
+
+    while (true)
+    {
+      _populate_transit_events_from_frontend_queues();
+      if (_is_flush_all_cutoff_written(cutoff))
+      {
+        break;
+      }
+
+      while (!has_pending_events_for_caching_when_transit_event_buffer_empty() &&
+             _process_lowest_timestamp_transit_event())
+      {
+      }
+    }
+
+    _flush_and_run_active_sinks(false, std::chrono::milliseconds{0}, SinkFlushReason::Explicit);
+    _flush_all_completed.store(request, std::memory_order_release);
   }
 
   /**
@@ -2585,6 +2716,9 @@ private:
   alignas(QUILL_CACHE_LINE_ALIGNED) std::mutex _wake_up_mutex;
   std::condition_variable _wake_up_cv;
   bool _wake_up_flag{false};
+
+  alignas(QUILL_CACHE_LINE_ALIGNED) std::atomic<uint64_t> _flush_all_requested{0};
+  std::atomic<uint64_t> _flush_all_completed{0};
 };
 
 #if defined(_WIN32) && defined(_MSC_VER) && !defined(__GNUC__)

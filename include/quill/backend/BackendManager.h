@@ -110,6 +110,12 @@ private:
   void notify_backend_thread() noexcept { _backend_worker.notify(); }
 
   /***/
+  QUILL_NODISCARD bool flush_all(std::chrono::nanoseconds timeout) noexcept
+  {
+    return _backend_worker.flush_all(timeout);
+  }
+
+  /***/
   QUILL_NODISCARD bool is_backend_thread_running() const noexcept
   {
     return _backend_worker.is_running();
