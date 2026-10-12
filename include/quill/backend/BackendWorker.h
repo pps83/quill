@@ -569,6 +569,8 @@ private:
       // This is useful when BackendTscClock is used to keep it up to date
       _resync_rdtsc_clock();
 
+      _thread_context_manager.add_spare_thread_context(_options.max_pooled_thread_contexts);
+
       // Also check if all queues are empty
       bool const queues_and_events_empty = _check_frontend_queues_and_cached_transit_events_empty();
       if (queues_and_events_empty)
@@ -2079,7 +2081,12 @@ private:
       // try to acquire the lock multiple times, but it should be fine as it is unlikely to have
       // that many to remove
       _check_failure_counter(_options.error_notifier, *found_invalid_and_empty_thread_context);
-      _thread_context_manager.remove_shared_invalidated_thread_context(*found_invalid_and_empty_thread_context);
+
+      // A pooled context starts its next thread without this thread's MDC and ordering state
+      (*found_invalid_and_empty_thread_context)->_backend_mdc_state.reset();
+      (*found_invalid_and_empty_thread_context)->_timestamp_ordering_grace_deadline = 0;
+      _thread_context_manager.remove_shared_invalidated_thread_context(
+        *found_invalid_and_empty_thread_context, _options.max_pooled_thread_contexts);
 
       // We also need to remove it from _thread_context_cache, that is used only by the backend
       _active_thread_contexts_cache.erase(found_invalid_and_empty_thread_context);

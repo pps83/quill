@@ -86,6 +86,14 @@ struct BackendOptions
   uint32_t transit_event_buffer_initial_capacity = 256;
 
   /**
+   * Up to this many drained thread contexts of exited threads, each with its frontend queue and
+   * transit event buffer, are kept for threads that start logging instead of being freed. When none
+   * is kept the backend allocates one ahead of time, so a thread's first log does not allocate its
+   * queue. Zero frees them and allocates nothing ahead.
+   */
+  size_t max_pooled_thread_contexts = 4;
+
+  /**
    * The backend gives priority to reading messages from the frontend queues of all
    * the hot threads and temporarily buffers them.
    *

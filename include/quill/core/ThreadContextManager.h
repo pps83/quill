@@ -192,6 +192,17 @@ public:
   /***/
   QUILL_NODISCARD bool is_valid() const noexcept { return _valid.load(std::memory_order_acquire); }
 
+  /**
+   * Hands a pooled context, drained by the backend, to the calling thread
+   */
+  void reuse_for_current_thread()
+  {
+    _thread_id = std::to_string(get_thread_id());
+    _thread_name = get_thread_name();
+    _conditional_arg_size_cache.clear();
+    _valid.store(true, std::memory_order_relaxed);
+  }
+
   /***/
   void increment_failure_counter() noexcept
   {
@@ -249,6 +260,81 @@ public:
     }
   }
 
+  /**
+   * Takes a pooled context for the calling thread's first log, or allocates one when none is pooled
+   */
+  QUILL_NODISCARD std::shared_ptr<ThreadContext> acquire_thread_context(
+    QueueType queue_type, size_t initial_queue_capacity, size_t unbounded_queue_max_capacity,
+    HugePagesPolicy huge_pages_policy)
+  {
+    std::shared_ptr<ThreadContext> thread_context;
+    {
+      LockGuard const lock{_spinlock};
+      _pool_queue_type = queue_type;
+      _pool_initial_queue_capacity = initial_queue_capacity;
+      _pool_unbounded_queue_max_capacity = unbounded_queue_max_capacity;
+      _pool_huge_pages_policy = huge_pages_policy;
+
+      if (!_pooled_thread_contexts.empty())
+      {
+        thread_context = std::move(_pooled_thread_contexts.back());
+        _pooled_thread_contexts.pop_back();
+      }
+    }
+
+    // The backend allocates the next thread's context ahead of time
+    _spare_thread_context_wanted.store(true, std::memory_order_relaxed);
+
+    if (thread_context)
+    {
+      thread_context->reuse_for_current_thread();
+      return thread_context;
+    }
+
+    return std::make_shared<ThreadContext>(queue_type, initial_queue_capacity,
+                                           unbounded_queue_max_capacity, huge_pages_policy);
+  }
+
+  /**
+   * Keeps a context ready in the pool for the next new thread. Called by the backend thread.
+   */
+  void add_spare_thread_context(size_t max_pooled_thread_contexts)
+  {
+    if (!_spare_thread_context_wanted.load(std::memory_order_relaxed) ||
+        !_spare_thread_context_wanted.exchange(false, std::memory_order_relaxed))
+    {
+      return;
+    }
+
+    QueueType queue_type;
+    size_t initial_queue_capacity;
+    size_t unbounded_queue_max_capacity;
+    HugePagesPolicy huge_pages_policy;
+    {
+      LockGuard const lock{_spinlock};
+      if ((max_pooled_thread_contexts == 0) || !_pooled_thread_contexts.empty())
+      {
+        return;
+      }
+
+      queue_type = _pool_queue_type;
+      initial_queue_capacity = _pool_initial_queue_capacity;
+      unbounded_queue_max_capacity = _pool_unbounded_queue_max_capacity;
+      huge_pages_policy = _pool_huge_pages_policy;
+    }
+
+    // Built outside the lock: the queue is large and zero-filled on construction
+    auto thread_context = std::make_shared<ThreadContext>(
+      queue_type, initial_queue_capacity, unbounded_queue_max_capacity, huge_pages_policy);
+
+    // Recycled contexts may have filled the pool meanwhile; the spare is then freed after the lock
+    LockGuard const lock{_spinlock};
+    if (_pooled_thread_contexts.size() < max_pooled_thread_contexts)
+    {
+      _pooled_thread_contexts.push_back(std::move(thread_context));
+    }
+  }
+
   /***/
   void register_thread_context(std::shared_ptr<ThreadContext> const& thread_context)
   {
@@ -287,9 +373,14 @@ public:
     return false;
   }
 
-  /***/
-  void remove_shared_invalidated_thread_context(ThreadContext const* thread_context)
+  /**
+   * Moves a drained context of an exited thread into the pool, or frees it when the pool is full
+   */
+  void remove_shared_invalidated_thread_context(ThreadContext const* thread_context,
+                                                size_t max_pooled_thread_contexts = 0)
   {
+    // Declared before the lock, so a context beyond the pool's limit is freed after it is released
+    std::shared_ptr<ThreadContext> removed;
     LockGuard const lock{_spinlock};
 
     // We could use std::find_if, but since this header is included in Logger.h, which is essential
@@ -329,6 +420,7 @@ public:
                    "ThreadContextManager::unregister_thread_context()");
     }
 
+    removed = std::move(*thread_context_it);
     _thread_contexts.erase(thread_context_it);
 
     // Decrement the counter since we found something to
@@ -336,6 +428,11 @@ public:
                  "_invalid_thread_context_count underflow in "
                  "ThreadContextManager::unregister_thread_context()");
     _invalid_thread_context_count.fetch_sub(1, std::memory_order_relaxed);
+
+    if (_pooled_thread_contexts.size() < max_pooled_thread_contexts)
+    {
+      _pooled_thread_contexts.push_back(std::move(removed));
+    }
   }
 
 private:
@@ -344,8 +441,14 @@ private:
 
 private:
   std::vector<std::shared_ptr<ThreadContext>> _thread_contexts; /**< The registered contexts */
+  std::vector<std::shared_ptr<ThreadContext>> _pooled_thread_contexts; /**< For new threads */
+  QueueType _pool_queue_type{QueueType::UnboundedBlocking}; /**< Last acquired context's options */
+  size_t _pool_initial_queue_capacity{0};
+  size_t _pool_unbounded_queue_max_capacity{0};
+  HugePagesPolicy _pool_huge_pages_policy{HugePagesPolicy::Never};
   Spinlock _spinlock; /**< Protect access when register contexts or removing contexts */
   std::atomic<bool> _new_thread_context_flag{false};
+  std::atomic<bool> _spare_thread_context_wanted{false};
   std::atomic<uint32_t> _invalid_thread_context_count{0};
 };
 
@@ -355,7 +458,7 @@ public:
   /***/
   ScopedThreadContext(QueueType queue_type, size_t initial_queue_capacity,
                       size_t unbounded_queue_max_capacity, HugePagesPolicy huge_pages_policy)
-    : _thread_context(std::make_shared<ThreadContext>(
+    : _thread_context(ThreadContextManager::instance().acquire_thread_context(
         queue_type, initial_queue_capacity, unbounded_queue_max_capacity, huge_pages_policy))
   {
 #if defined(QUILL_ENABLE_ASSERTIONS) || !defined(NDEBUG)
