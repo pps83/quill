@@ -242,6 +242,40 @@ public:
   static void notify() noexcept { detail::BackendManager::instance().notify_backend_thread(); }
 
   /**
+   * Writes every message queued so far by any thread and flushes the sinks, waiting at most timeout.
+   * Uses no queue of the calling thread, so a crash handler can call it on a thread that never
+   * logged.
+   * @return false on timeout, when the backend is not running or when called on the backend thread
+   */
+  QUILL_NODISCARD static bool flush_all(std::chrono::nanoseconds timeout) noexcept
+  {
+    return detail::BackendManager::instance().flush_all(timeout);
+  }
+
+  /**
+   * The first half of flush_all: asks the backend to write every message queued so far by any
+   * thread and flush the sinks, without waiting.
+   * @return the request for wait_flush_all, 0 when the backend is not running or when called on the
+   * backend thread
+   */
+  QUILL_NODISCARD static uint64_t request_flush_all() noexcept
+  {
+    return detail::BackendManager::instance().request_flush_all();
+  }
+
+  /**
+   * The second half of flush_all: waits until the backend served the request or the timeout passes.
+   * Called again after a timeout, it still waits for the messages queued before the request, so
+   * threads that keep logging cannot hold it.
+   * @return false on timeout and for request 0
+   */
+  QUILL_NODISCARD static bool wait_flush_all(uint64_t request,
+                                             std::chrono::nanoseconds timeout) noexcept
+  {
+    return detail::BackendManager::instance().wait_flush_all(request, timeout);
+  }
+
+  /**
    * Checks if the backend is currently running.
    * @return True if the backend is running, false otherwise.
    */
