@@ -132,7 +132,7 @@ public:
     }
 
     uint64_t const current_timestamp = detail::rdtsc();
-    detail::ThreadContext* const thread_context = _thread_context;
+    detail::ThreadContext* const thread_context = detail::FrontendThreadState::thread_context;
 
     if (QUILL_UNLIKELY(thread_context == nullptr))
     {
@@ -212,7 +212,7 @@ public:
     }
 
     uint64_t const current_timestamp = detail::rdtsc();
-    detail::ThreadContext* const thread_context = _thread_context;
+    detail::ThreadContext* const thread_context = detail::FrontendThreadState::thread_context;
 
     if (QUILL_UNLIKELY(thread_context == nullptr))
     {
@@ -283,12 +283,12 @@ public:
     uint64_t const timestamp =
       (_clock_source == ClockSourceType::Tsc) ? detail::rdtsc() : _get_non_tsc_timestamp();
 
-    if (QUILL_UNLIKELY(_thread_context == nullptr))
+    detail::ThreadContext* const thread_context = _local_thread_context();
+    if (QUILL_UNLIKELY(thread_context == nullptr))
     {
-      _thread_context = detail::get_local_thread_context<frontend_options_t>();
+      return false;
     }
 
-    detail::ThreadContext* const thread_context = _thread_context;
     auto& size_cache = thread_context->get_conditional_arg_size_cache();
 
     size_t const label_count = labels.size();
@@ -442,12 +442,12 @@ public:
     uint64_t const current_timestamp =
       (_clock_source == ClockSourceType::Tsc) ? detail::rdtsc() : _get_non_tsc_timestamp();
 
-    if (QUILL_UNLIKELY(_thread_context == nullptr))
+    detail::ThreadContext* const thread_context = _local_thread_context();
+    if (QUILL_UNLIKELY(thread_context == nullptr))
     {
-      _thread_context = detail::get_local_thread_context<frontend_options_t>();
+      return false;
     }
 
-    detail::ThreadContext* const thread_context = _thread_context;
     queue_t& queue = thread_context->get_spsc_queue<frontend_options_t::queue_type>();
 
     size_t total_size{s_header_size};
@@ -686,6 +686,21 @@ private:
   }
 
   /**
+   * The calling thread's context, set up by its first log; null once the thread released it at its
+   * exit, when a log from a later thread_local destructor is refused
+   */
+  QUILL_NODISCARD static detail::ThreadContext* _local_thread_context()
+  {
+    if (QUILL_UNLIKELY(detail::FrontendThreadState::thread_context == nullptr) &&
+        !detail::FrontendThreadState::released)
+    {
+      detail::FrontendThreadState::thread_context =
+        detail::get_local_thread_context<frontend_options_t>();
+    }
+    return detail::FrontendThreadState::thread_context;
+  }
+
+  /**
    * Slow path for publish_metric. Mirrors _log_statement_noinline but uses a decoder that simply
    * consumes the queued metric value without involving the fmt argument store.
    */
@@ -697,12 +712,12 @@ private:
       current_timestamp = _get_non_tsc_timestamp();
     }
 
-    if (QUILL_UNLIKELY(_thread_context == nullptr))
+    detail::ThreadContext* const thread_context = _local_thread_context();
+    if (QUILL_UNLIKELY(thread_context == nullptr))
     {
-      _thread_context = detail::get_local_thread_context<frontend_options_t>();
+      return false;
     }
 
-    detail::ThreadContext* const thread_context = _thread_context;
     queue_t& queue = thread_context->get_spsc_queue<frontend_options_t::queue_type>();
 
     size_t total_size = s_header_size;
@@ -754,12 +769,12 @@ private:
       current_timestamp = _get_non_tsc_timestamp();
     }
 
-    if (QUILL_UNLIKELY(_thread_context == nullptr))
+    detail::ThreadContext* const thread_context = _local_thread_context();
+    if (QUILL_UNLIKELY(thread_context == nullptr))
     {
-      _thread_context = detail::get_local_thread_context<frontend_options_t>();
+      return false;
     }
 
-    detail::ThreadContext* const thread_context = _thread_context;
     queue_t& queue = thread_context->get_spsc_queue<frontend_options_t::queue_type>();
 
     size_t total_size = s_header_size +
