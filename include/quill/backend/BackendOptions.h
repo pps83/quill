@@ -296,6 +296,17 @@ struct BackendOptions
   std::chrono::milliseconds rdtsc_resync_interval = std::chrono::milliseconds{500};
 
   /**
+   * This option is only applicable to Loggers with ClockSourceType::Tsc
+   *
+   * When enabled, pattern formatters, filters and sinks receive the frontend's raw rdtsc value as
+   * the timestamp instead of nanoseconds since epoch, for an application that converts it with its
+   * own clock. The backend still converts the value for `log_timestamp_ordering_grace_period`.
+   *
+   * Events are ordered by the raw value, so all Loggers should then use ClockSourceType::Tsc.
+   */
+  bool raw_rdtsc_timestamps = false;
+
+  /**
    * This option specifies the minimum time interval (in milliseconds) before the backend thread
    * flushes the output buffers (flush_sink()) for all sinks in the application.
    *
