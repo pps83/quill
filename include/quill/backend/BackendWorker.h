@@ -897,6 +897,8 @@ private:
                  "transit_event->logger_base->_clock_source has invalid enum value - possible "
                  "memory corruption");
 
+    uint64_t const rdtsc_value = transit_event->timestamp;
+
     if (transit_event->logger_base->_clock_source == ClockSourceType::Tsc)
     {
       // If using the rdtsc clock, convert the value to nanoseconds since epoch.
@@ -968,6 +970,13 @@ private:
         // Leave this record queued until the grace window expires.
         return false;
       }
+    }
+
+    if (_options.raw_rdtsc_timestamps &&
+        (transit_event->logger_base->_clock_source == ClockSourceType::Tsc))
+    {
+      // The converted value only served the ordering check above
+      transit_event->timestamp = rdtsc_value;
     }
 
     if (transit_event->macro_metadata->event() == MacroMetadata::Event::DynamicMetric)
