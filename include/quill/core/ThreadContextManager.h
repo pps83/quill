@@ -346,6 +346,15 @@ public:
     }
   }
 
+  /**
+   * Number of contexts kept ready for new threads
+   */
+  QUILL_NODISCARD size_t pooled_thread_context_count() noexcept
+  {
+    LockGuard const lock{_spinlock};
+    return _pooled_thread_contexts.size();
+  }
+
   /***/
   void register_thread_context(std::shared_ptr<ThreadContext> const& thread_context)
   {

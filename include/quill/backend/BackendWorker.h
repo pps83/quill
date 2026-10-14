@@ -571,6 +571,9 @@ private:
       _process_flush_all_request();
     }
 
+    // Before reading the queues, so a new thread finds a context even while the backend is busy
+    _thread_context_manager.add_spare_thread_context(_options.max_pooled_thread_contexts);
+
     // load all contexts locally
     _update_active_thread_contexts_cache();
 
@@ -610,8 +613,6 @@ private:
 
       // This is useful when BackendTscClock is used to keep it up to date
       _resync_rdtsc_clock();
-
-      _thread_context_manager.add_spare_thread_context(_options.max_pooled_thread_contexts);
 
       // Also check if all queues are empty
       bool const queues_and_events_empty = _check_frontend_queues_and_cached_transit_events_empty();
