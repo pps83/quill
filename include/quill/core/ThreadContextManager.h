@@ -449,13 +449,31 @@ public:
                  "ThreadContextManager::unregister_thread_context()");
     _invalid_thread_context_count.fetch_sub(1, std::memory_order_relaxed);
 
-    if (_pooled_thread_contexts.size() < max_pooled_thread_contexts)
+    if (_has_grown_queue(*removed))
+    {
+      // Freed, so new threads start small; the backend makes a spare of the initial size if none is left
+      if (_pooled_thread_contexts.empty())
+      {
+        _spare_thread_context_wanted.store(true, std::memory_order_relaxed);
+      }
+    }
+    else if (_pooled_thread_contexts.size() < max_pooled_thread_contexts)
     {
       _pooled_thread_contexts.push_back(std::move(removed));
     }
   }
 
 private:
+  /**
+   * True when an unbounded queue grew past the capacity new threads start with
+   */
+  QUILL_NODISCARD bool _has_grown_queue(ThreadContext const& thread_context) const noexcept
+  {
+    return thread_context.has_unbounded_queue_type() &&
+      (thread_context.get_spsc_queue_union().unbounded_spsc_queue.capacity() >
+       next_power_of_two(_pool_initial_queue_capacity));
+  }
+
   ThreadContextManager() = default;
   ~ThreadContextManager() = default;
 
