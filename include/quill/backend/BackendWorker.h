@@ -241,7 +241,7 @@ public:
   }
 
   /**
-   * Starts the backend worker thread
+   * Starts the backend worker thread without waiting for it to run
    * @throws std::runtime_error, std::system_error on failures
    */
   QUILL_ATTRIBUTE_COLD void run(BackendOptions const& options)
@@ -254,13 +254,17 @@ public:
 
     validate_options(options);
 
+    // _init sets it again on the backend thread; clock conversions may run before that
+    _is_rdtsc_clock_config_valid.store(options.sleep_duration <= options.rdtsc_resync_interval,
+                                       std::memory_order_relaxed);
+
     std::unique_ptr<BackendWorkerLock> backend_worker_lock;
     if (options.check_backend_singleton_instance)
     {
       backend_worker_lock = std::make_unique<BackendWorkerLock>(_process_id);
     }
 
-    std::thread worker(
+    auto worker_main =
       [this, options]()
       {
         QUILL_TRY { _init(options); }
@@ -317,9 +321,6 @@ public:
         }
 #endif
 
-        // All okay, set the backend worker thread running flag
-        _is_worker_running.store(true);
-
         // Running
         while (QUILL_LIKELY(_is_worker_running.load(std::memory_order_relaxed)))
         {
@@ -353,7 +354,20 @@ public:
 #endif
 
         _has_worker_thread_exited.store(true);
-      });
+      };
+
+    // Set before the thread exists, so a stop() that comes before the thread runs still ends it
+    _is_worker_running.store(true);
+
+    std::thread worker;
+    QUILL_TRY { worker = std::thread{std::move(worker_main)}; }
+#if !defined(QUILL_NO_EXCEPTIONS)
+    QUILL_CATCH_ALL()
+    {
+      _is_worker_running.store(false);
+      throw;
+    }
+#endif
 
     // Publish ownership only after thread creation succeeds. If std::thread construction throws,
     // the local singleton lock is released so a later start attempt can proceed.
@@ -361,12 +375,6 @@ public:
 
     // Move the worker ownership to our class
     _worker_thread.swap(worker);
-
-    while (!_is_worker_running.load(std::memory_order_seq_cst))
-    {
-      // wait for the thread to start
-      detail::sleep_for_ns(100'000ull); // 100 us
-    }
   }
 
   /**

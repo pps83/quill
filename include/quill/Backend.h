@@ -19,6 +19,7 @@
   #include <cstdint>
   #include <cstdlib>
   #include <mutex>
+  #include <thread>
 #endif
 
 QUILL_BEGIN_NAMESPACE
@@ -61,7 +62,7 @@ public:
                      (void)detail::SignalHandlerContext::instance();
                      (void)detail::MetricManager::instance();
 
-                     // Run the backend worker thread, we wait here until the thread enters the main loop
+                     // Run the backend worker thread, without waiting for it to start
                      detail::BackendManager::instance().start_backend_thread(options);
 
                      // Set up an exit handler to call stop when the main application exits.
@@ -147,8 +148,14 @@ public:
           signal_handler_context.excluded_logger_substrings = signal_handler_options.excluded_logger_substrings;
           signal_handler_context.signal_handler_timeout_seconds.store(signal_handler_options.timeout_seconds);
 
-          // Run the backend worker thread, we wait here until the thread enters the main loop
+          // Run the backend worker thread, without waiting for it to start
           detail::BackendManager::instance().start_backend_thread(backend_options);
+
+          // The signal handler needs the backend thread's id, set once the thread has started
+          while (detail::BackendManager::instance().get_backend_thread_id() == 0)
+          {
+            std::this_thread::yield();
+          }
 
           // We need to update the signal handler with some backend thread details
           signal_handler_context.backend_thread_id.store(
