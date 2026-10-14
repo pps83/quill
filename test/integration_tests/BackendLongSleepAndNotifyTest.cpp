@@ -6,6 +6,7 @@
 #include "quill/LogMacros.h"
 #include "quill/sinks/FileSink.h"
 
+#include <atomic>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -22,9 +23,17 @@ TEST_CASE("backend_long_sleep_and_notify")
   static std::string const logger_name_prefix = "logger_";
 
   // Start the backend thread
+  static std::atomic<bool> backend_idle{false};
   BackendOptions backend_options;
   backend_options.sleep_duration = std::chrono::hours{24};
+  backend_options.backend_worker_on_poll_end = []() { backend_idle.store(true); };
   Backend::start(backend_options);
+
+  // Start returns before the backend thread runs: log only once it has gone to sleep
+  while (!backend_idle.load())
+  {
+    std::this_thread::yield();
+  }
 
   std::vector<std::thread> threads;
   for (size_t i = 0; i < number_of_threads; ++i)
