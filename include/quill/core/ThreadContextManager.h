@@ -498,6 +498,12 @@ struct FrontendThreadState
 {
   static inline QUILL_THREAD_LOCAL ThreadContext* thread_context = nullptr;
   static inline QUILL_THREAD_LOCAL bool released = false;
+
+  /**
+   * Called on a thread's first log, once its context is set up and before the message is queued;
+   * a log from the hook goes ahead of that message
+   */
+  static inline std::atomic<void (*)()> on_first_log{nullptr};
 };
 
 class ScopedThreadContext

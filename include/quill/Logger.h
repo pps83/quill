@@ -694,10 +694,24 @@ private:
     if (QUILL_UNLIKELY(detail::FrontendThreadState::thread_context == nullptr) &&
         !detail::FrontendThreadState::released)
     {
-      detail::FrontendThreadState::thread_context =
-        detail::get_local_thread_context<frontend_options_t>();
+      _set_up_thread_context();
     }
     return detail::FrontendThreadState::thread_context;
+  }
+
+  /**
+   * A thread's first log: takes its context and runs the first-log hook, out of line so the hot
+   * path stays small
+   */
+  QUILL_NOINLINE static void _set_up_thread_context()
+  {
+    detail::FrontendThreadState::thread_context =
+      detail::get_local_thread_context<frontend_options_t>();
+
+    if (auto const hook = detail::FrontendThreadState::on_first_log.load(std::memory_order_acquire))
+    {
+      hook();
+    }
   }
 
   /**
