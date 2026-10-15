@@ -182,6 +182,15 @@ public:
   }
 
   /**
+   * Return the current buffer's producer side, which moves to a new buffer when the queue grows
+   * @note: producer only
+   */
+  QUILL_NODISCARD QueueProducer<size_t>& producer() noexcept
+  {
+    return _producer->bounded_queue.producer();
+  }
+
+  /**
    * Shrinks the queue if capacity is a valid smaller power of 2.
    * @param capacity New target capacity.
    * @note: producer (frontend) is safe to call this - Do not call on the consumer (the backend worker)
