@@ -60,6 +60,33 @@ TEST_CASE("read_write_buffer")
   REQUIRE_FALSE(res);
 }
 
+TEST_CASE("write_through_producer")
+{
+  BoundedSPSCQueue buffer{64u};
+  QueueProducer<size_t>& producer = buffer.producer();
+
+  // 24-byte records cross the end of the ring
+  for (uint32_t i = 0; i < 100; ++i)
+  {
+    if (producer.reader_pos_cache_plus_capacity - producer.writer_pos < 24u)
+    {
+      REQUIRE_NE(buffer.prepare_write(24u), nullptr);
+    }
+
+    std::byte* write_buf = producer.storage + (producer.writer_pos & producer.mask);
+    std::memset(write_buf, static_cast<int>(i), 24u);
+    producer.writer_pos += 24u;
+    producer.atomic_writer_pos.store(producer.writer_pos, std::memory_order_release);
+
+    std::byte* res = buffer.prepare_read();
+    REQUIRE(res);
+    REQUIRE_EQ(std::to_integer<uint32_t>(res[0]), i);
+    REQUIRE_EQ(std::to_integer<uint32_t>(res[23]), i);
+    buffer.finish_read(24u);
+    buffer.commit_read();
+  }
+}
+
 TEST_CASE("bounded_queue_integer_overflow")
 {
   BoundedSPSCQueueImpl<uint8_t> buffer{128, quill::HugePagesPolicy::Never, 0};

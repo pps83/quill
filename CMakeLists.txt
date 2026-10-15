@@ -250,6 +250,7 @@ set(HEADER_FILES
         include/quill/core/Metric.h
         include/quill/core/MetricManager.h
         include/quill/core/PatternFormatterOptions.h
+        include/quill/core/QueueProducer.h
         include/quill/core/QuillError.h
         include/quill/core/Rdtsc.h
         include/quill/core/SinkManager.h
