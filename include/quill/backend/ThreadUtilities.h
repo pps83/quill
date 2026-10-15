@@ -47,6 +47,9 @@
 #elif defined(__OpenBSD__)
   #include <pthread_np.h>
   #include <unistd.h>
+#elif defined(__CYGWIN__)
+  #include <pthread.h>
+  #include <unistd.h>
 #else
   // linux
   #include <pthread.h>
