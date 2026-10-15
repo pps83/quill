@@ -948,8 +948,21 @@ private:
                   "Packed header decoding requires pointers to fit in 64 bits");
 
     uint64_t header_words[4];
-    std::memcpy(header_words, read_pos, sizeof(header_words));
-    read_pos += sizeof(header_words);
+    std::memcpy(header_words, read_pos, 2 * sizeof(uint64_t));
+
+    if ((header_words[1] & 1u) != 0)
+    {
+      // A compact record: its decoder reads on from the tagged word
+      read_pos += sizeof(uint64_t);
+      header_words[1] = reinterpret_cast<uintptr_t>(_options.compact_metadata);
+      header_words[2] = reinterpret_cast<uintptr_t>(_options.compact_logger);
+      header_words[3] = reinterpret_cast<uintptr_t>(_options.compact_decoder);
+    }
+    else
+    {
+      std::memcpy(header_words + 2, read_pos + 2 * sizeof(uint64_t), 2 * sizeof(uint64_t));
+      read_pos += sizeof(header_words);
+    }
 
     transit_event->timestamp = header_words[0];
     transit_event->macro_metadata =

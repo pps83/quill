@@ -12,6 +12,7 @@
 #ifndef QUILL_MODULE
   #include <array>
   #include <chrono>
+  #include <cstddef>
   #include <cstdint>
   #include <cstdio>
   #include <functional>
@@ -27,8 +28,18 @@
 
 QUILL_BEGIN_NAMESPACE
 
+/** Forward Declarations **/
+QUILL_BEGIN_EXPORT
+
+class DynamicFormatArgStore;
+class MacroMetadata;
+
+QUILL_END_EXPORT
+
 namespace detail
 {
+class LoggerBase;
+
 inline void backend_options_default_error_notifier(std::string const& error_message)
 {
 #if !defined(__MINGW32__)
@@ -305,6 +316,17 @@ struct BackendOptions
    * Events are ordered by the raw value, so all Loggers should then use ClockSourceType::Tsc.
    */
   bool raw_rdtsc_timestamps = false;
+
+  /**
+   * Compact records, which an application writes straight into a thread's queue: the timestamp,
+   * then a word with its low bit set where a regular record has its MacroMetadata pointer.
+   *
+   * compact_decoder reads on from the tagged word, stores the arguments and advances past the
+   * record; compact_metadata formats it and compact_logger writes it.
+   */
+  void (*compact_decoder)(std::byte*& data, DynamicFormatArgStore& args_store) = nullptr;
+  MacroMetadata const* compact_metadata = nullptr;
+  detail::LoggerBase* compact_logger = nullptr;
 
   /**
    * This option specifies the minimum time interval (in milliseconds) before the backend thread
