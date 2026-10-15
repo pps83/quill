@@ -20,7 +20,7 @@
 
 #else
   // Assume x86 or x86-64 platform
-  #if __has_include(<intrin.h>) && defined(_WIN32)
+  #if __has_include(<intrin.h>) && defined(_MSC_VER)
     // Use Windows-specific intrinsics
     #include <intrin.h>
   #elif __has_include(<x86gprintrin.h>) && !defined(__INTEL_COMPILER)
