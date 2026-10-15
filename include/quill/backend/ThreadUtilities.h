@@ -47,6 +47,14 @@
 #elif defined(__OpenBSD__)
   #include <pthread_np.h>
   #include <unistd.h>
+#elif defined(__CYGWIN__)
+  #if !defined(NOMINMAX)
+    #define NOMINMAX
+  #endif
+
+  #include <pthread.h>
+  #include <unistd.h>
+  #include <windows.h>
 #else
   // linux
   #include <pthread.h>
@@ -225,10 +233,7 @@ QUILL_NODISCARD QUILL_EXPORT QUILL_ATTRIBUTE_USED inline uint32_t get_thread_id(
 
   g_cached_thread_id = g_next_thread_id.fetch_add(1u, std::memory_order_relaxed) + 1u;
   return g_cached_thread_id;
-#elif defined(__CYGWIN__)
-  // get thread id on cygwin not supported
-  return 0;
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__CYGWIN__)
   return static_cast<uint32_t>(GetCurrentThreadId());
 #elif defined(__linux__)
   return static_cast<uint32_t>(::syscall(SYS_gettid));
