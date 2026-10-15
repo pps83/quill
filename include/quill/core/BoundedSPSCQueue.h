@@ -3,6 +3,7 @@
 #include "quill/core/Attributes.h"
 #include "quill/core/Common.h"
 #include "quill/core/MathUtilities.h"
+#include "quill/core/QueueProducer.h"
 #include "quill/core/QuillError.h"
 
 #ifndef QUILL_MODULE
@@ -74,11 +75,13 @@ public:
     // records that cross the ring boundary and is written before it is read.
     std::memset(_storage, 0, static_cast<size_t>(_capacity));
 
-    _atomic_writer_pos.store(0);
+    _producer.storage = _storage;
+    _producer.mask = _mask;
+    _producer.atomic_writer_pos.store(0);
     _atomic_reader_pos.store(0);
 
     // reader_pos starts at 0, so cached value is 0 + capacity
-    _reader_pos_cache_plus_capacity = _capacity;
+    _producer.reader_pos_cache_plus_capacity = _capacity;
   }
 
   ~BoundedSPSCQueueImpl() { _free_aligned(_storage); }
@@ -91,42 +94,43 @@ public:
 
   QUILL_NODISCARD QUILL_ATTRIBUTE_HOT std::byte* prepare_write(integer_type n) noexcept
   {
-    if (static_cast<integer_type>(_reader_pos_cache_plus_capacity - _writer_pos) < n)
+    if (static_cast<integer_type>(_producer.reader_pos_cache_plus_capacity - _producer.writer_pos) < n)
     {
       // not enough space, we need to load reader and re-check
-      _reader_pos_cache_plus_capacity = _atomic_reader_pos.load(std::memory_order_acquire) + _capacity;
+      _producer.reader_pos_cache_plus_capacity =
+        _atomic_reader_pos.load(std::memory_order_acquire) + _capacity;
 
-      if (static_cast<integer_type>(_reader_pos_cache_plus_capacity - _writer_pos) < n)
+      if (static_cast<integer_type>(_producer.reader_pos_cache_plus_capacity - _producer.writer_pos) < n)
       {
         return nullptr;
       }
     }
 
-    return _storage + (_writer_pos & _mask);
+    return _producer.storage + (_producer.writer_pos & _producer.mask);
   }
 
   QUILL_NODISCARD QUILL_ATTRIBUTE_HOT WriteReservation prepare_write_reserve_cached(integer_type n) noexcept
   {
-    integer_type const writer_pos = _writer_pos;
+    integer_type const writer_pos = _producer.writer_pos;
 
-    if (QUILL_UNLIKELY(static_cast<integer_type>(_reader_pos_cache_plus_capacity - writer_pos) < n))
+    if (QUILL_UNLIKELY(static_cast<integer_type>(_producer.reader_pos_cache_plus_capacity - writer_pos) < n))
     {
       return WriteReservation{nullptr, writer_pos, this};
     }
 
     // _storage is never null after construction; hint lets the compiler
     // eliminate a redundant null-check on the computed write pointer.
-    QUILL_ASSUME(_storage != nullptr);
+    QUILL_ASSUME(_producer.storage != nullptr);
 
-    return WriteReservation{_storage + (writer_pos & _mask), writer_pos, this};
+    return WriteReservation{_producer.storage + (writer_pos & _producer.mask), writer_pos, this};
   }
 
-  QUILL_ATTRIBUTE_HOT void finish_write(integer_type n) noexcept { _writer_pos += n; }
+  QUILL_ATTRIBUTE_HOT void finish_write(integer_type n) noexcept { _producer.writer_pos += n; }
 
   QUILL_ATTRIBUTE_HOT void commit_write() noexcept
   {
     // set the atomic flag so the reader can see write
-    _atomic_writer_pos.store(_writer_pos, std::memory_order_release);
+    _producer.atomic_writer_pos.store(_producer.writer_pos, std::memory_order_release);
   }
 
   /**
@@ -134,15 +138,15 @@ public:
    */
   QUILL_ATTRIBUTE_HOT void finish_and_commit_write(integer_type n) noexcept
   {
-    finish_and_commit_write_reservation(_writer_pos + n);
+    finish_and_commit_write_reservation(_producer.writer_pos + n);
   }
 
   QUILL_ATTRIBUTE_HOT void finish_and_commit_write_reservation(integer_type new_writer_pos) noexcept
   {
-    _writer_pos = new_writer_pos;
+    _producer.writer_pos = new_writer_pos;
 
     // set the atomic flag so the reader can see write
-    _atomic_writer_pos.store(new_writer_pos, std::memory_order_release);
+    _producer.atomic_writer_pos.store(new_writer_pos, std::memory_order_release);
   }
 
   QUILL_NODISCARD QUILL_ATTRIBUTE_HOT std::byte* prepare_read() noexcept
@@ -180,7 +184,7 @@ public:
     if (_writer_pos_cache == _reader_pos)
     {
       // if we think the queue is empty we also load the atomic variable to check further
-      _writer_pos_cache = _atomic_writer_pos.load(std::memory_order_acquire);
+      _writer_pos_cache = _producer.atomic_writer_pos.load(std::memory_order_acquire);
 
       if (_writer_pos_cache == _reader_pos)
       {
@@ -197,6 +201,11 @@ public:
   }
 
   QUILL_NODISCARD HugePagesPolicy huge_pages_policy() const noexcept { return _huge_pages_policy; }
+
+  /**
+   * @note: producer only
+   */
+  QUILL_NODISCARD QueueProducer<integer_type>& producer() noexcept { return _producer; }
 
 private:
   /**
@@ -370,9 +379,7 @@ private:
   std::byte* const _storage{nullptr};
   HugePagesPolicy const _huge_pages_policy;
 
-  alignas(QUILL_CACHE_LINE_ALIGNED) std::atomic<integer_type> _atomic_writer_pos{0};
-  alignas(QUILL_CACHE_LINE_ALIGNED) integer_type _writer_pos{0};
-  integer_type _reader_pos_cache_plus_capacity{0};
+  QueueProducer<integer_type> _producer;
 
   alignas(QUILL_CACHE_LINE_ALIGNED) std::atomic<integer_type> _atomic_reader_pos{0};
   alignas(QUILL_CACHE_LINE_ALIGNED) integer_type _reader_pos{0};
