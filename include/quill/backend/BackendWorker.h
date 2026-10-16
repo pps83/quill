@@ -538,16 +538,16 @@ private:
    */
   QUILL_ATTRIBUTE_COLD static void _ensure_linker_retains_symbols()
   {
-    // Calls to ensure it is retained by the linker.
-    QUILL_MAYBE_UNUSED static auto thread_name = get_thread_name();
+    // Calls to ensure it is retained by the linker; locals, as a static's atexit waits for exit()'s lock
+    QUILL_MAYBE_UNUSED auto thread_name = get_thread_name();
     (void)thread_name;
 
 #if defined(_WIN32)
     std::wstring const dummy = L"dummy";
-    QUILL_MAYBE_UNUSED static auto encode1 = utf8_encode(dummy);
+    QUILL_MAYBE_UNUSED auto encode1 = utf8_encode(dummy);
     (void)encode1;
 
-    QUILL_MAYBE_UNUSED static auto encode2 =
+    QUILL_MAYBE_UNUSED auto encode2 =
       utf8_encode(reinterpret_cast<std::byte const*>(dummy.data()), dummy.size());
     (void)encode2;
 #endif
