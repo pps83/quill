@@ -77,6 +77,12 @@ QUILL_END_EXPORT
 namespace detail
 {
 
+/***/
+inline bool ThreadContext::has_transit_events() const noexcept
+{
+  return _transit_event_buffer && !_transit_event_buffer->empty();
+}
+
 #if defined(_WIN32) && defined(_MSC_VER) && !defined(__GNUC__)
   #pragma warning(push)
   #pragma warning(disable : 4324)
