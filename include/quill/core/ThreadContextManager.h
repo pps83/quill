@@ -21,6 +21,7 @@
   #include <new>
   #include <string>
   #include <string_view>
+  #include <thread>
   #include <type_traits>
   #include <vector>
 #endif
@@ -252,8 +253,27 @@ public:
     return instance;
   }
 
+  /**
+   * Threads inside ~ScopedThreadContext's use of the manager, which destroy_instance waits for.
+   * Sequentially consistent with instance_ptr: either a thread sees no manager or destroy_instance
+   * sees the thread
+   */
+  QUILL_EXPORT static inline std::atomic<int>& retiring_threads() noexcept
+  {
+    static std::atomic<int> count{0};
+    return count;
+  }
+
   /***/
-  static void destroy_instance() noexcept { delete instance_ptr().exchange(nullptr); }
+  static void destroy_instance() noexcept
+  {
+    ThreadContextManager* const manager = instance_ptr().exchange(nullptr);
+    while (retiring_threads().load() != 0)
+    {
+      std::this_thread::yield();
+    }
+    delete manager;
+  }
 
   /***/
   ThreadContextManager(ThreadContextManager const&) = delete;
@@ -544,12 +564,13 @@ public:
     // There is only exception for the thread who owns the ThreadContextCollection the
     // main thread. The thread context of the main thread can get deleted before getting invalidated
     // Count retirement before publishing invalidity: the backend may remove it immediately.
-    // A quill::GlobalState may have destroyed the manager, and the backend with it, already.
-    if (ThreadContextManager* manager =
-          ThreadContextManager::instance_ptr().load(std::memory_order_acquire))
+    // A quill::GlobalState may have destroyed the manager already; destroy_instance waits for us.
+    ThreadContextManager::retiring_threads().fetch_add(1);
+    if (ThreadContextManager* manager = ThreadContextManager::instance_ptr().load())
     {
       manager->add_invalid_thread_context();
     }
+    ThreadContextManager::retiring_threads().fetch_sub(1);
     _thread_context->mark_invalid();
   }
 
