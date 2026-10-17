@@ -73,9 +73,24 @@ TEST_CASE("flush_all_writes_every_thread_queue")
   REQUIRE(quill::testing::file_contains(file_contents, "other message 999"));
   REQUIRE(quill::testing::file_contains(file_contents, "main message 999"));
 
+  // One request waited for in short slices, as a caller that watches the backend's progress does
+  log_messages(logger, "requested");
+  uint64_t const request = Backend::request_flush_all();
+  REQUIRE_NE(request, 0u);
+  bool served{false};
+  for (int i = 0; (i < 1000) && !served; ++i)
+  {
+    served = Backend::wait_flush_all(request, std::chrono::milliseconds{10});
+  }
+  REQUIRE(served);
+  REQUIRE(Backend::wait_flush_all(request, std::chrono::nanoseconds{0}));
+  REQUIRE_EQ(quill::testing::file_contents(filename).size(), 3 * number_of_messages);
+
   Frontend::remove_logger(logger);
   Backend::stop();
   REQUIRE_FALSE(Backend::flush_all(std::chrono::seconds{1}));
+  REQUIRE_EQ(Backend::request_flush_all(), 0u);
+  REQUIRE_FALSE(Backend::wait_flush_all(0, std::chrono::seconds{1}));
 
   testing::remove_file(filename);
 }

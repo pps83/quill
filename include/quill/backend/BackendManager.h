@@ -116,6 +116,19 @@ private:
   }
 
   /***/
+  QUILL_NODISCARD uint64_t request_flush_all() noexcept
+  {
+    return _backend_worker.request_flush_all();
+  }
+
+  /***/
+  QUILL_NODISCARD bool wait_flush_all(uint64_t request,
+                                      std::chrono::nanoseconds timeout) const noexcept
+  {
+    return _backend_worker.wait_flush_all(request, timeout);
+  }
+
+  /***/
   QUILL_NODISCARD bool is_backend_thread_running() const noexcept
   {
     return _backend_worker.is_running();

@@ -145,13 +145,40 @@ public:
    */
   QUILL_NODISCARD bool flush_all(std::chrono::nanoseconds timeout) noexcept
   {
+    return wait_flush_all(request_flush_all(), timeout);
+  }
+
+  /**
+   * The first half of flush_all: asks the backend to write every message queued so far by any
+   * thread and flush the sinks, without waiting.
+   * @return the request for wait_flush_all, 0 when the backend is not running or when called on its
+   * own thread
+   */
+  QUILL_NODISCARD uint64_t request_flush_all() noexcept
+  {
     if (!is_running() || (get_thread_id() == _worker_thread_id.load()))
     {
-      return false;
+      return 0;
     }
 
     uint64_t const request = _flush_all_requested.fetch_add(1, std::memory_order_acq_rel) + 1;
     notify();
+    return request;
+  }
+
+  /**
+   * The second half of flush_all: waits until the backend served the request or the timeout passes.
+   * Called again after a timeout, it still waits for the messages queued before the request, not
+   * for later ones.
+   * @return false on timeout and for request 0
+   */
+  QUILL_NODISCARD bool wait_flush_all(uint64_t request,
+                                      std::chrono::nanoseconds timeout) const noexcept
+  {
+    if (request == 0)
+    {
+      return false;
+    }
 
     auto const deadline = std::chrono::steady_clock::now() + timeout;
     while (_flush_all_completed.load(std::memory_order_acquire) < request)
