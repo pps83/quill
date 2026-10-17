@@ -204,6 +204,12 @@ public:
     _valid.store(true, std::memory_order_relaxed);
   }
 
+  /**
+   * Backend thread only: true while events read from this context's queue are not written yet.
+   * Defined in BackendWorker.h, where the transit event buffer is a complete type
+   */
+  QUILL_NODISCARD bool has_transit_events() const noexcept;
+
   /***/
   void increment_failure_counter() noexcept
   {
