@@ -10,6 +10,7 @@
 #ifndef QUILL_MODULE
   #include <atomic>
   #include <cstdint>
+  #include <thread>
 #endif
 
 QUILL_BEGIN_NAMESPACE
@@ -35,7 +36,8 @@ public:
     {
       while (_flag.load(std::memory_order_relaxed) == State::Locked)
       {
-        // keep trying
+        // With more threads than cores, a holder that lost its core gets it back instead of waiting out time slices
+        std::this_thread::yield();
       }
     } while (_flag.exchange(State::Locked, std::memory_order_acquire) == State::Locked);
   }
