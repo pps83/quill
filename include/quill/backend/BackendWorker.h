@@ -754,21 +754,36 @@ private:
   {
     uint64_t tsc;
     uint64_t system;
+    uint64_t rdtsc_value; // the counter when the request was taken
   };
 
   QUILL_NODISCARD FlushAllCutoff _flush_all_cutoff_now() const
   {
-    FlushAllCutoff cutoff{(std::numeric_limits<uint64_t>::max)(), detail::get_system_time_ns()};
-    uint64_t const rdtsc_value = detail::rdtsc();
+    FlushAllCutoff cutoff{(std::numeric_limits<uint64_t>::max)(), detail::get_system_time_ns(),
+                          detail::rdtsc()};
+    _convert_flush_all_cutoff(cutoff);
+    return cutoff;
+  }
+
+  /**
+   * Without raw timestamps the TSC cutoff needs the clock, which the first TSC record decoded
+   * creates: until then it stays unset, then the counter taken with the request is converted once
+   */
+  void _convert_flush_all_cutoff(FlushAllCutoff& cutoff) const
+  {
+    if (cutoff.tsc != (std::numeric_limits<uint64_t>::max)())
+    {
+      return;
+    }
+
     if (_options.raw_rdtsc_timestamps)
     {
-      cutoff.tsc = rdtsc_value;
+      cutoff.tsc = cutoff.rdtsc_value;
     }
     else if (RdtscClock* rdtsc_clock = _rdtsc_clock.load(std::memory_order_relaxed))
     {
-      cutoff.tsc = rdtsc_clock->time_since_epoch(rdtsc_value);
+      cutoff.tsc = rdtsc_clock->time_since_epoch(cutoff.rdtsc_value);
     }
-    return cutoff;
   }
 
   /**
@@ -824,11 +839,12 @@ private:
   QUILL_ATTRIBUTE_COLD void _process_flush_all_request()
   {
     uint64_t const request = _flush_all_requested.load(std::memory_order_acquire);
-    FlushAllCutoff const cutoff = _flush_all_cutoff_now();
+    FlushAllCutoff cutoff = _flush_all_cutoff_now();
 
     while (true)
     {
       _populate_transit_events_from_frontend_queues();
+      _convert_flush_all_cutoff(cutoff);
       if (_is_flush_all_cutoff_written(cutoff))
       {
         break;
