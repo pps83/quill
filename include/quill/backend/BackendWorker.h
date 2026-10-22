@@ -633,6 +633,9 @@ private:
           // in the queue might be missed.
         }
       }
+
+      // An exited thread's drained context is reclaimed while other threads keep the backend busy
+      _cleanup_invalidated_thread_contexts();
     }
     else
     {
